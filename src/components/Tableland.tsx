@@ -1,8 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { useSigner } from "../hooks/useSigner";
 import { Database } from "@tableland/sdk";
+import { useSigner } from "../hooks/useSigner";
 
 // Example table schema
 interface TableData {
@@ -19,6 +19,8 @@ export function Tableland() {
   // Form input for the table's value
   const [writeData, setWriteData] = useState<string>("");
   const [data, setData] = useState<TableData[]>([]);
+  // Show loading indicator when waiting for transactions
+  const [loading, setLoading] = useState<boolean>(false);
   // Get the connected signer
   const signer = useSigner();
 
@@ -77,6 +79,7 @@ export function Tableland() {
   // Handle button click actions
   async function handleClick(e: any) {
     e.preventDefault();
+    setLoading(true);
     switch (e.target.name) {
       case "create":
         await create();
@@ -90,6 +93,7 @@ export function Tableland() {
       default:
         break;
     }
+    setLoading(false);
   }
 
   // Handle form input changes for table prefix & writing data
@@ -212,6 +216,18 @@ export function Tableland() {
           </div>
         </div>
       </div>
+      {loading && (
+        <div className="fixed inset-0 flex justify-center items-center">
+          <div
+            className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-current border-e-transparent align-[-0.125em] text-surface motion-reduce:animate-[spin_1.5s_linear_infinite] dark:text-gray"
+            role="status"
+          >
+            <span className="!absolute !-m-px !h-px !w-px !overflow-hidden !whitespace-nowrap !border-0 !p-0 ![clip:rect(0,0,0,0)]">
+              Loading...
+            </span>
+          </div>
+        </div>
+      )}
     </>
   );
 }
