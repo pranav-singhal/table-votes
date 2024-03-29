@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Database } from "@tableland/sdk";
-import { useSigner } from "../hooks/useSigner";
+import { useSigner } from "@/hooks/useSigner";
 
 // Example table schema
 interface TableData {
