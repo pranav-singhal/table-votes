@@ -1,233 +1,573 @@
 "use client";
 
-import { useState } from "react";
-import { Database } from "@tableland/sdk";
 import { useSigner } from "@/hooks/useSigner";
+import { Database } from "@tableland/sdk";
+import { useState } from "react";
+import { VoteButtons } from "./VoteButtons";
 
-// Example table schema
-interface TableData {
+// Table schemas
+interface Project {
   id: number;
-  val: string;
+  name: string;
+  description: string;
+  creator: string;
+  created_at: number;
+  upvotes: number;
+  downvotes: number;
 }
 
-// A component with form inputs to to create a table, write data to it, and read data from it
+interface Vote {
+  id: number;
+  project_id: number;
+  voter: string;
+  vote_type: "up" | "down";
+  voted_at: number;
+}
+
+// Add a constant for the storage key
+const STORAGE_KEY = "tableland_voting_tables";
+
 export function Tableland() {
-  // Custom table prefix, used when creating the table and via form input
-  const [prefix, setPrefix] = useState<string>("");
-  // Tableland-generated table name in the form `prefix_chainId_tableId`
-  const [tableName, setTableName] = useState<string | undefined>();
-  // Form input for the table's value
-  const [writeData, setWriteData] = useState<string>("");
-  const [data, setData] = useState<TableData[]>([]);
-  // Show loading indicator when waiting for transactions
+  // Modify the table name states to initialize from localStorage
+  const [projectsTable, setProjectsTable] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      const tables = saved ? JSON.parse(saved) : {};
+      return tables.projectsTable || undefined;
+    }
+    return undefined;
+  });
+
+  const [votesTable, setVotesTable] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      const tables = saved ? JSON.parse(saved) : {};
+      return tables.votesTable || undefined;
+    }
+    return undefined;
+  });
+
+  // Add function to save tables to localStorage
+  const saveTablestoStorage = (projectsTable?: string, votesTable?: string) => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        projectsTable,
+        votesTable,
+      })
+    );
+  };
+
+  // Store projects data
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [votes, setVotes] = useState<Vote[]>([]);
+
   const [loading, setLoading] = useState<boolean>(false);
-  // Get the connected signer
   const signer = useSigner();
 
-  // Create a table with hardcoded prefix and schema
-  async function create() {
+  // Add new state for project creation form
+  const [newProject, setNewProject] = useState({
+    name: "",
+    description: "",
+  });
+  const [activeTab, setActiveTab] = useState<"setup" | "create" | "view" | "permissions">("setup");
+
+  // Add new state for permission management
+  const [permissionAddress, setPermissionAddress] = useState("");
+
+  // Add connection status display
+  const getConnectionStatus = () => {
+    if (!signer) {
+      return <div className="text-red-500 mb-4">Please connect your wallet first</div>;
+    }
+    if (!projectsTable || !votesTable) {
+      return <div className="text-yellow-500 mb-4">Please set up the tables in the Setup tab first</div>;
+    }
+    return null;
+  };
+
+  // Create both tables for the voting app
+  async function createTables() {
+    if (!signer) return;
+
     try {
+      setLoading(true);
       const db = new Database({ signer });
-      // Example table schema with an `id` and `val` column
-      const schema = `id integer primary key, val text`;
-      const { meta: create } = await db
-        .prepare(`CREATE TABLE "${prefix}" (${schema});`)
+
+      // Create projects table
+      const { meta: createProjects } = await db
+        .prepare(`CREATE TABLE projects (
+          id integer primary key,
+          name text not null,
+          description text not null,
+          creator text not null,
+          created_at integer not null
+        );`)
         .run();
-      await create.txn?.wait();
-      const { name: tableName } = create.txn!;
-      setTableName(tableName);
-      console.log(`Created table: ${tableName}`);
+
+      await createProjects.txn?.wait();
+      const projectsTableName = createProjects.txn?.name;
+      setProjectsTable(projectsTableName);
+
+      // Create votes table 
+      const { meta: createVotes } = await db
+        .prepare(`CREATE TABLE votes (
+          id integer primary key,
+          project_id integer not null,
+          voter text not null,
+          vote_type text not null,
+          voted_at integer not null,
+          UNIQUE(project_id, voter)
+        );`)
+        .run();
+
+      await createVotes.txn?.wait();
+      const votesTableName = createVotes.txn?.name;
+      setVotesTable(votesTableName);
+
+      // Save both table names to localStorage
+      saveTablestoStorage(projectsTableName, votesTableName);
+
+      console.log(`Created tables: ${projectsTableName}, ${votesTableName}`);
+
     } catch (err: any) {
-      console.log(err.message);
+      console.error("Error creating tables:", err.message);
+    } finally {
+      setLoading(false);
     }
   }
 
-  // Write data to the table from a form input
-  async function write() {
+  // Read all projects
+  async function readProjects() {
+    if (!projectsTable || !votesTable) return;
+
     try {
+      setLoading(true);
       const db = new Database({ signer });
-      if (tableName !== undefined) {
-        const { meta: write } = await db
-          .prepare(`INSERT INTO ${tableName} (val) VALUES (?);`)
-          .bind(writeData)
-          .run();
-        await write.txn?.wait();
-        console.log(`Successfully wrote data to table '${tableName}'`);
-      }
+
+      const { results } = await db
+        .prepare(`
+          SELECT 
+            p.*,
+            COALESCE(up.upvotes, 0) as upvotes,
+            COALESCE(down.downvotes, 0) as downvotes
+          FROM ${projectsTable} p
+          LEFT JOIN (
+            SELECT project_id, COUNT(*) as upvotes 
+            FROM ${votesTable} 
+            WHERE vote_type = 'up' 
+            GROUP BY project_id
+          ) up ON p.id = up.project_id
+          LEFT JOIN (
+            SELECT project_id, COUNT(*) as downvotes 
+            FROM ${votesTable} 
+            WHERE vote_type = 'down' 
+            GROUP BY project_id
+          ) down ON p.id = down.project_id
+        `)
+        .all<Project>();
+
+      setProjects(results);
+      console.log("Projects with votes:", results);
+
     } catch (err: any) {
-      console.error(err.message);
+      console.error("Error reading projects:", err.message);
+    } finally {
+      setLoading(false);
     }
   }
 
-  // Read table data upon button click
-  async function read() {
+  // Read all votes
+  async function readVotes() {
+    if (!votesTable) return;
+
     try {
+      setLoading(true);
       const db = new Database({ signer });
-      if (tableName !== undefined) {
-        const { results } = await db
-          .prepare(`SELECT * FROM ${tableName}`)
-          .all<TableData>();
-        console.log(`Read data from table '${tableName}':`);
-        console.log(results);
-        setData(results);
-      }
+
+      const { results } = await db
+        .prepare(`SELECT * FROM ${votesTable}`)
+        .all<Vote>();
+
+      setVotes(results);
+      console.log("Votes:", results);
+
     } catch (err: any) {
-      console.error(err.message);
+      console.error("Error reading votes:", err.message);
+    } finally {
+      setLoading(false);
     }
   }
 
-  // Handle button click actions
-  async function handleClick(e: any) {
+  // Add new function to create a project
+  async function createProject(e: React.FormEvent) {
     e.preventDefault();
-    setLoading(true);
-    switch (e.target.name) {
-      case "create":
-        await create();
-        break;
-      case "write":
-        await write();
-        break;
-      case "read":
-        await read();
-        break;
-      default:
-        break;
+    if (!projectsTable || !signer) return;
+
+    try {
+      setLoading(true);
+      const db = new Database({ signer });
+
+      const { meta: insert } = await db
+        .prepare(
+          `INSERT INTO ${projectsTable} (name, description, creator, created_at) VALUES (?, ?, ?, ?);`
+        )
+        .bind(
+          newProject.name,
+          newProject.description,
+          await signer.getAddress(),
+          Date.now()
+        )
+        .run();
+
+      await insert.txn?.wait();
+      console.log("Project created successfully");
+
+      // Clear form
+      setNewProject({ name: "", description: "" });
+      // Refresh projects list
+      await readProjects();
+
+    } catch (err: any) {
+      console.error("Error creating project:", err.message);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }
 
-  // Handle form input changes for table prefix & writing data
-  function handleChange(e: any) {
-    switch (e.target.name) {
-      case "create":
-        setPrefix(e.target.value);
-        break;
-      case "write":
-        setWriteData(e.target.value);
-        break;
-      default:
-        break;
+  // Add handler for form inputs
+  function handleProjectInputChange(e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) {
+    setNewProject(prev => ({
+      ...prev,
+      [e.target.name]: e.target.value
+    }));
+  }
+
+  // Add a function to clear tables (optional)
+  const clearTables = () => {
+    setProjectsTable(undefined);
+    setVotesTable(undefined);
+    localStorage.removeItem(STORAGE_KEY);
+  };
+
+  // Add function to grant all permissions
+  async function grantAllPermissions(address: string) {
+    if (!signer || !projectsTable || !votesTable) return;
+
+    try {
+      setLoading(true);
+      const db = new Database({ signer });
+
+      // Grant all permissions for projects table
+      const { meta: grantProjects } = await db
+        .prepare(
+          `GRANT INSERT, UPDATE, DELETE ON ${projectsTable} TO '${address}'`
+        )
+        .run();
+      await grantProjects.txn?.wait();
+
+      // Grant all permissions for votes table
+      const { meta: grantVotes } = await db
+        .prepare(
+          `GRANT INSERT, UPDATE, DELETE ON ${votesTable} TO '${address}'`
+        )
+        .run();
+      await grantVotes.txn?.wait();
+
+      console.log(`Granted all permissions to ${address}`);
+      setPermissionAddress(""); // Clear the input
+    } catch (err: any) {
+      console.error("Error granting permissions:", err.message);
+    } finally {
+      setLoading(false);
     }
   }
 
-  // Basic form and tabular view that renders table data
   return (
-    <>
-      <div className="w-full max-w-xs mx-6">
-        <h2 className="text-xl font-bold mb-2">Table setup & actions</h2>
-        <form className="shadow-md rounded px-2 pt-2 pb-2 mb-2 mr-2">
-          <div className="mb-4">
-            <label className="block text-md font-bold mb-2">
-              Create your table
-            </label>
-            <input
-              onChange={handleChange}
-              name="create"
-              placeholder="starter_table"
-              disabled={signer ? false : true}
-              className="shadow appearance-none border rounded py-2 px-3 leading-tight focus:outline-none focus:shadow-outline text-black"
-            ></input>
-            <button
-              onClick={handleClick}
-              name="create"
-              disabled={signer ? false : true}
-              className={
-                "shadow bg-gray-200 hover:bg-gray-300 focus:shadow-outline focus:outline-non font-bold py-2 px-4 ml-2 rounded w-20"
-              }
-            >
-              Create
-            </button>
-          </div>{" "}
-          <div className="mb-4">
-            <label className="block text-md font-bold mb-2">Write data</label>
-            <input
-              onChange={handleChange}
-              name="write"
-              placeholder="Bobby Tables"
-              disabled={signer && tableName ? false : true}
-              className={
-                "shadow appearance-none border rounded py-2 px-3 leading-tight focus:outline-none focus:shadow-outline text-black" +
-                (signer && tableName ? "" : " opacity-50 cursor-not-allowed")
-              }
-            ></input>
-            <button
-              onClick={handleClick}
-              name="write"
-              className={
-                "shadow bg-gray-200 hover:bg-gray-300 focus:shadow-outline focus:outline-none font-bold py-2 px-4 ml-2 rounded w-20" +
-                (signer && tableName ? "" : " opacity-50 cursor-not-allowed")
-              }
-            >
-              Write
-            </button>
-          </div>
-          <div className="flex justify-center mt-8 mb-2">
-            <button
-              type="button"
-              onClick={handleClick}
-              name="read"
-              className={
-                "shadow bg-gray-200 hover:bg-gray-300 focus:shadow-outline focus:outline-none font-bold py-2 px-4 rounded w-20" +
-                (signer && tableName ? "" : " opacity-50 cursor-not-allowed")
-              }
-            >
-              Read
-            </button>
-          </div>
-        </form>
+    <div className="w-full max-w-2xl mx-auto p-6">
+      <h1 className="text-2xl font-bold mb-6">Voting App</h1>
+
+      {/* Add connection status */}
+      {getConnectionStatus()}
+
+      {/* Tab Navigation */}
+      <div className="flex mb-6 space-x-2">
+        <button
+          onClick={() => setActiveTab("setup")}
+          className={`px-4 py-2 rounded ${activeTab === "setup"
+            ? "bg-blue-500 text-white"
+            : "bg-gray-200 hover:bg-gray-300"
+            }`}
+        >
+          Setup
+        </button>
+        <button
+          onClick={() => setActiveTab("create")}
+          disabled={!projectsTable}
+          className={`px-4 py-2 rounded ${activeTab === "create"
+            ? "bg-blue-500 text-white"
+            : "bg-gray-200 hover:bg-gray-300"
+            } ${!projectsTable ? "opacity-50 cursor-not-allowed" : ""}`}
+        >
+          Create Project
+        </button>
+        <button
+          onClick={() => setActiveTab("view")}
+          disabled={!projectsTable}
+          className={`px-4 py-2 rounded ${activeTab === "view"
+            ? "bg-blue-500 text-white"
+            : "bg-gray-200 hover:bg-gray-300"
+            } ${!projectsTable ? "opacity-50 cursor-not-allowed" : ""}`}
+        >
+          View Projects
+        </button>
+        <button
+          onClick={() => setActiveTab("permissions")}
+          disabled={!projectsTable || !votesTable}
+          className={`px-4 py-2 rounded ${activeTab === "permissions"
+            ? "bg-blue-500 text-white"
+            : "bg-gray-200 hover:bg-gray-300"
+            } ${!projectsTable || !votesTable ? "opacity-50 cursor-not-allowed" : ""}`}
+        >
+          Permissions
+        </button>
       </div>
-      <div className="w-full max-w-xs mx-6">
-        <div className="w-full max-w-xs">
-          <h2 className="text-xl font-bold mb-2">Table info</h2>
-          <div className="shadow-md rounded px-2 pt-2 pb-2 mb-2 mr-2">
-            <h3 className="mb-2">
-              <span className="font-bold">Name:</span> {tableName || "N/A"}
-            </h3>
-            <h2 className="font-bold">Data:</h2>
-            <div className="flex justify-center">
-              <table className="table-auto shadow-lg">
-                <thead>
-                  <tr>
-                    <th className="border bg-gray-200 px-4 py-2 text-bold">
-                      id
-                    </th>
-                    <th className="border bg-gray-200 px-4 py-2 text-bold">
-                      val
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.length === 0 ? (
-                    <tr>
-                      <td className="border px-4 py-2">N/A</td>
-                      <td className="border px-4 py-2">N/A</td>
-                    </tr>
-                  ) : (
-                    data.map((d) => (
-                      <tr key={d.id}>
-                        <td className="border px-4 py-2">{d.id}</td>
-                        <td className="border px-4 py-2">{d.val}</td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
+
+      {/* Setup Tab */}
+      {activeTab === "setup" && (
+        <div className="mb-8">
+          <div className="flex space-x-4">
+            <button
+              onClick={createTables}
+              disabled={!signer || loading}
+              className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded disabled:opacity-50"
+            >
+              Create Tables
+            </button>
+            {(projectsTable || votesTable) && (
+              <button
+                onClick={clearTables}
+                className="bg-red-500 hover:bg-red-700 text-white font-bold py-2 px-4 rounded"
+              >
+                Clear Tables
+              </button>
+            )}
+          </div>
+
+          {(projectsTable || votesTable) && (
+            <div className="space-y-4 mt-4">
+              <h2 className="text-xl font-bold">Created Tables:</h2>
+              {projectsTable && (
+                <div className="p-4 bg-gray-100 rounded">
+                  <p><span className="font-bold">Projects Table:</span> {projectsTable}</p>
+                </div>
+              )}
+              {votesTable && (
+                <div className="p-4 bg-gray-100 rounded">
+                  <p><span className="font-bold">Votes Table:</span> {votesTable}</p>
+                </div>
+              )}
             </div>
-          </div>
+          )}
         </div>
-      </div>
-      {loading && (
-        <div className="fixed inset-0 flex justify-center items-center">
-          <div
-            className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-current border-e-transparent align-[-0.125em] text-surface motion-reduce:animate-[spin_1.5s_linear_infinite] dark:text-gray"
-            role="status"
-          >
-            <span className="!absolute !-m-px !h-px !w-px !overflow-hidden !whitespace-nowrap !border-0 !p-0 ![clip:rect(0,0,0,0)]">
-              Loading...
-            </span>
+      )}
+
+      {/* Create Project Tab */}
+      {activeTab === "create" && (
+        <div className="bg-white rounded-lg p-6 shadow-md">
+          <h2 className="text-xl font-bold mb-4">Create New Project</h2>
+          {!signer ? (
+            <div className="text-center p-4 bg-gray-100 rounded">
+              Please connect your wallet to create a project
+            </div>
+          ) : !projectsTable ? (
+            <div className="text-center p-4 bg-gray-100 rounded">
+              Please set up the tables in the Setup tab first
+            </div>
+          ) : (
+            <form onSubmit={createProject} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium mb-1">
+                  Project Name
+                </label>
+                <input
+                  type="text"
+                  name="name"
+                  value={newProject.name}
+                  onChange={handleProjectInputChange}
+                  required
+                  className="w-full px-3 py-2 border rounded-md text-black"
+                  placeholder="Enter project name"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">
+                  Description
+                </label>
+                <textarea
+                  name="description"
+                  value={newProject.description}
+                  onChange={handleProjectInputChange}
+                  required
+                  className="w-full px-3 py-2 border rounded-md text-black"
+                  rows={4}
+                  placeholder="Enter project description"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={loading || !signer}
+                className="w-full bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded disabled:opacity-50"
+              >
+                Create Project
+              </button>
+            </form>
+          )}
+        </div>
+      )}
+
+      {/* View Projects Tab */}
+      {activeTab === "view" && (
+        <div className="space-y-4">
+          <div className="flex justify-between items-center">
+            <h2 className="text-xl font-bold">Projects</h2>
+            <button
+              onClick={readProjects}
+              className="bg-gray-500 hover:bg-gray-700 text-white font-bold py-1 px-3 rounded text-sm"
+            >
+              Refresh
+            </button>
+          </div>
+          <div className="space-y-4">
+            {projects.map((project) => (
+              <div key={project.id} className="bg-white rounded-lg p-4 shadow-md">
+                <div className="flex justify-between items-start">
+                  <div>
+                    <h3 className="text-lg font-bold">{project.name}</h3>
+                    <p className="text-gray-600 mt-2">{project.description}</p>
+                    <div className="mt-2 text-sm text-gray-500">
+                      <p>Created by: {project.creator.slice(0, 6)}...{project.creator.slice(-4)}</p>
+                      <p>Created: {new Date(project.created_at).toLocaleDateString()}</p>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className="flex items-center space-x-4">
+                      <div className="text-green-600">
+                        <span className="text-lg font-bold">{project.upvotes}</span>
+                        <span className="ml-1">👍</span>
+                      </div>
+                      <div className="text-red-600">
+                        <span className="text-lg font-bold">{project.downvotes}</span>
+                        <span className="ml-1">👎</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                {votesTable && (
+                  <div className="mt-4">
+                    <VoteButtons
+                      projectId={project.id}
+                      votesTable={votesTable}
+                      creator={project.creator}
+                      onVoteComplete={readProjects}
+                    />
+                  </div>
+                )}
+              </div>
+            ))}
+            {projects.length === 0 && (
+              <p className="text-gray-500 text-center">
+                {!projectsTable
+                  ? "Please set up the tables first"
+                  : "No projects found"}
+              </p>
+            )}
           </div>
         </div>
       )}
-    </>
+
+      {/* Permissions Tab */}
+      {activeTab === "permissions" && (
+        <div className="bg-white rounded-lg p-6 shadow-md">
+          <h2 className="text-xl font-bold mb-4">Manage Permissions</h2>
+          {!signer ? (
+            <div className="text-center p-4 bg-gray-100 rounded">
+              Please connect your wallet to manage permissions
+            </div>
+          ) : !projectsTable || !votesTable ? (
+            <div className="text-center p-4 bg-gray-100 rounded">
+              Please set up the tables first
+            </div>
+          ) : (
+            <div className="space-y-6">
+              <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4">
+                <div className="flex">
+                  <div className="flex-shrink-0">
+                    <svg className="h-5 w-5 text-yellow-400" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                    </svg>
+                  </div>
+                  <div className="ml-3">
+                    <p className="text-sm text-yellow-700">
+                      Warning: Granting permissions will allow the address to perform all operations on the tables.
+                      Make sure you trust the address.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  grantAllPermissions(permissionAddress);
+                }}
+                className="space-y-4"
+              >
+                <div>
+                  <label className="block text-sm font-medium mb-1">
+                    Ethereum Address
+                  </label>
+                  <input
+                    type="text"
+                    value={permissionAddress}
+                    onChange={(e) => setPermissionAddress(e.target.value)}
+                    placeholder="0x..."
+                    pattern="^0x[a-fA-F0-9]{40}$"
+                    required
+                    className="w-full px-3 py-2 border rounded-md text-black"
+                  />
+                  <p className="mt-1 text-sm text-gray-500">
+                    Enter the Ethereum address to grant permissions to
+                  </p>
+                </div>
+                <button
+                  type="submit"
+                  disabled={loading || !signer}
+                  className="w-full bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded disabled:opacity-50"
+                >
+                  Grant All Permissions
+                </button>
+              </form>
+
+              <div className="mt-6">
+                <h3 className="font-bold mb-2">What permissions will be granted:</h3>
+                <ul className="list-disc list-inside space-y-1 text-sm text-gray-600">
+                  <li>INSERT: Ability to add new records</li>
+                  <li>UPDATE: Ability to modify existing records</li>
+                  <li>DELETE: Ability to remove records</li>
+                </ul>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Loading Overlay */}
+      {loading && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-white"></div>
+        </div>
+      )}
+    </div>
   );
 }
