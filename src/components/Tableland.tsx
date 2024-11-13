@@ -3,6 +3,7 @@
 import { useSigner } from "@/hooks/useSigner";
 import { Database } from "@tableland/sdk";
 import { useState } from "react";
+import { LeaderBoard } from "./LeaderBoard";
 import { VoteButtons } from "./VoteButtons";
 
 // Table schemas
@@ -70,7 +71,7 @@ export function Tableland() {
     name: "",
     description: "",
   });
-  const [activeTab, setActiveTab] = useState<"setup" | "create" | "view" | "permissions">("setup");
+  const [activeTab, setActiveTab] = useState<"setup" | "create" | "view" | "permissions" | "leaderboard">("setup");
 
   // Add new state for permission management
   const [permissionAddress, setPermissionAddress] = useState("");
@@ -331,6 +332,16 @@ export function Tableland() {
         >
           Permissions
         </button>
+        <button
+          onClick={() => setActiveTab("leaderboard")}
+          disabled={!projectsTable || !votesTable}
+          className={`px-4 py-2 rounded ${activeTab === "leaderboard"
+              ? "bg-blue-500 text-white"
+              : "bg-gray-200 hover:bg-gray-300"
+            } ${!projectsTable || !votesTable ? "opacity-50 cursor-not-allowed" : ""}`}
+        >
+          Leaderboard
+        </button>
       </div>
 
       {/* Setup Tab */}
@@ -558,6 +569,22 @@ export function Tableland() {
                 </ul>
               </div>
             </div>
+          )}
+        </div>
+      )}
+
+      {/* Leaderboard Tab */}
+      {activeTab === "leaderboard" && (
+        <div className="bg-white rounded-lg p-6 shadow-md">
+          {!projectsTable || !votesTable ? (
+            <div className="text-center p-4 bg-gray-100 rounded">
+              Please set up the tables first
+            </div>
+          ) : (
+            <LeaderBoard
+              projectsTable={projectsTable}
+              votesTable={votesTable}
+            />
           )}
         </div>
       )}
