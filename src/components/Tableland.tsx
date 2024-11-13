@@ -4,6 +4,7 @@ import { useSigner } from "@/hooks/useSigner";
 import { Database } from "@tableland/sdk";
 import { useState } from "react";
 import { LeaderBoard } from "./LeaderBoard";
+import { TableDetails } from "./TableDetails";
 import { VoteButtons } from "./VoteButtons";
 
 // Table schemas
@@ -286,7 +287,10 @@ export function Tableland() {
 
   return (
     <div className="w-full max-w-2xl mx-auto p-6">
-      <h1 className="text-2xl font-bold mb-6">Voting App</h1>
+      <h1 className="text-2xl font-bold mb-6">Builder Blind Dates Live Edition Voting!</h1>
+      <p className="text-2xl font-semibold text-transparent bg-clip-text bg-gradient-to-r from-purple-500 via-pink-500 to-orange-500 mb-4 animate-pulse">
+        🎉 Vote for your favorite projects and help them shine! ✨
+      </p>
 
       {/* Add connection status */}
       {getConnectionStatus()}
@@ -336,8 +340,8 @@ export function Tableland() {
           onClick={() => setActiveTab("leaderboard")}
           disabled={!projectsTable || !votesTable}
           className={`px-4 py-2 rounded ${activeTab === "leaderboard"
-              ? "bg-blue-500 text-white"
-              : "bg-gray-200 hover:bg-gray-300"
+            ? "bg-blue-500 text-white"
+            : "bg-gray-200 hover:bg-gray-300"
             } ${!projectsTable || !votesTable ? "opacity-50 cursor-not-allowed" : ""}`}
         >
           Leaderboard
@@ -369,14 +373,16 @@ export function Tableland() {
             <div className="space-y-4 mt-4">
               <h2 className="text-xl font-bold">Created Tables:</h2>
               {projectsTable && (
-                <div className="p-4 bg-gray-100 rounded">
-                  <p><span className="font-bold">Projects Table:</span> {projectsTable}</p>
-                </div>
+                <TableDetails
+                  tableName={projectsTable}
+                  label="Projects Table"
+                />
               )}
               {votesTable && (
-                <div className="p-4 bg-gray-100 rounded">
-                  <p><span className="font-bold">Votes Table:</span> {votesTable}</p>
-                </div>
+                <TableDetails
+                  tableName={votesTable}
+                  label="Votes Table"
+                />
               )}
             </div>
           )}
